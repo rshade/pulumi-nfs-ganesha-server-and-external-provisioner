@@ -442,52 +442,249 @@ nfs_provisioner_service = kubernetes.core.v1.Service(
     },
     opts=pulumi.ResourceOptions(protect=False),
 )
-# nfs_server = Pod(
-#     "nfs_server",
-#     metadata=ObjectMetaArgs(name="nfs-server"),
-#     spec=PodSpecArgs(
-#         containers=[
-#             ContainerArgs(
-#                 name="nfs-server",
-#                 image="ghcr.io/ntj125app/docker-nfs-server:nightly",
-#                 security_context=SecurityContextArgs(
-#                     privileged=True,
-#                 ),
-#                 env=[
-#                     EnvVarArgs(
-#                         name="NFS_EXPORT_0",
-#                         value="/exports                  *(rw,no_subtree_check)",
-#                     ),
-#                 ],
-#                 ports=[
-#                     ContainerPortArgs(
-#                         name="nfs",
-#                         container_port=2049,
-#                         protocol="TCP",
-#                     ),
-#                     ContainerPortArgs(
-#                         name="mountd",
-#                         container_port=20048,
-#                         protocol="TCP",
-#                     ),
-#                     ContainerPortArgs(
-#                         name="rpcbind",
-#                         container_port=111,
-#                         protocol="TCP",
-#                     ),
-#                 ],
-#                 volume_mounts=[
-#                     VolumeMountArgs(name="nfs-storage", mount_path="/exports")
-#                 ],
-#             ),
-#         ],
-#         volumes=[
-#             VolumeArgs(
-#                 name="nfs-storage",
-#                 persistent_volume_claim=PersistentVolumeClaimVolumeSourceArgs(
-#                     claim_name=pvc.metadata.name,
-#                 ),
-#             )
-#         ],
-#     ),
-# )
+
+example_nfs_storage_class = kubernetes.storage.v1.StorageClass(
+    "example-nfs",
+    api_version="storage.k8s.io/v1",
+    kind="StorageClass",
+    metadata={
+        "annotations": {},
+        "name": "example-nfs",
+    },
+    mount_options=["vers=4.1"],
+    provisioner="example.com/nfs",
+    reclaim_policy="Delete",
+    volume_binding_mode="Immediate",
+    opts=pulumi.ResourceOptions(protect=False),
+)
+
+nfs_pvc = kubernetes.core.v1.PersistentVolumeClaim(
+    "nfs",
+    api_version="v1",
+    kind="PersistentVolumeClaim",
+    metadata={
+        "annotations": {
+            "pv_kubernetes_io_bind_completed": "yes",
+            "pv_kubernetes_io_bound_by_controller": "yes",
+            "volume_beta_kubernetes_io_storage_provisioner": "example.com/nfs",
+            "volume_kubernetes_io_storage_provisioner": "example.com/nfs",
+        },
+        "finalizers": ["kubernetes.io/pvc-protection"],
+        "name": "nfs",
+        "namespace": "default",
+    },
+    spec={
+        "access_modes": ["ReadWriteMany"],
+        "resources": {
+            "requests": {
+                "storage": "1Mi",
+            },
+        },
+        "storage_class_name": "example-nfs",
+        "volume_mode": "Filesystem",
+    },
+    opts=pulumi.ResourceOptions(protect=False),
+)
+
+write_pod = kubernetes.core.v1.Pod(
+    "write-pod",
+    api_version="v1",
+    kind="Pod",
+    metadata={
+        "annotations": {},
+        "name": "write-pod",
+        "namespace": "default",
+    },
+    spec={
+        "containers": [
+            {
+                "args": [
+                    "-c",
+                    "touch /mnt/SUCCESS && exit 0 || exit 1",
+                ],
+                "command": ["/bin/sh"],
+                "image": "gcr.io/google_containers/busybox:1.24",
+                "image_pull_policy": "IfNotPresent",
+                "name": "write-pod",
+                "resources": {},
+                "termination_message_path": "/dev/termination-log",
+                "termination_message_policy": "File",
+                "volume_mounts": [
+                    {
+                        "mount_path": "/mnt",
+                        "name": "nfs-pvc",
+                    },
+                ],
+            }
+        ],
+        "dns_policy": "ClusterFirst",
+        "enable_service_links": True,
+        "node_name": "k3s-k8s-rs-79c0-d6fed8-node-pool-4c4d-sftfs",
+        "preemption_policy": "PreemptLowerPriority",
+        "priority": 0,
+        "restart_policy": "Never",
+        "scheduler_name": "default-scheduler",
+        "security_context": {},
+        "service_account": "default",
+        "service_account_name": "default",
+        "termination_grace_period_seconds": 30,
+        "tolerations": [
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/not-ready",
+                "operator": "Exists",
+                "toleration_seconds": 300,
+            },
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/unreachable",
+                "operator": "Exists",
+                "toleration_seconds": 300,
+            },
+        ],
+        "volumes": [
+            {
+                "name": "nfs-pvc",
+                "persistent_volume_claim": {
+                    "claim_name": "nfs",
+                },
+            },
+        ],
+    },
+    opts=pulumi.ResourceOptions(protect=False),
+)
+
+read_pod = kubernetes.core.v1.Pod(
+    "read-pod",
+    api_version="v1",
+    kind="Pod",
+    metadata={
+        "annotations": {},
+        "name": "read-pod",
+        "namespace": "default",
+    },
+    spec={
+        "containers": [
+            {
+                "args": [
+                    "-c",
+                    "test -f /mnt/SUCCESS && exit 0 || exit 1",
+                ],
+                "command": ["/bin/sh"],
+                "image": "gcr.io/google_containers/busybox:1.24",
+                "image_pull_policy": "IfNotPresent",
+                "name": "read-pod",
+                "resources": {},
+                "termination_message_path": "/dev/termination-log",
+                "termination_message_policy": "File",
+                "volume_mounts": [
+                    {
+                        "mount_path": "/mnt",
+                        "name": "nfs-pvc",
+                    },
+                ],
+            }
+        ],
+        "dns_policy": "ClusterFirst",
+        "enable_service_links": True,
+        "node_name": "k3s-k8s-rs-79c0-d6fed8-node-pool-4c4d-sftfs",
+        "preemption_policy": "PreemptLowerPriority",
+        "priority": 0,
+        "restart_policy": "Never",
+        "scheduler_name": "default-scheduler",
+        "security_context": {},
+        "service_account": "default",
+        "service_account_name": "default",
+        "termination_grace_period_seconds": 30,
+        "tolerations": [
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/not-ready",
+                "operator": "Exists",
+                "toleration_seconds": 300,
+            },
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/unreachable",
+                "operator": "Exists",
+                "toleration_seconds": 300,
+            },
+        ],
+        "volumes": [
+            {
+                "name": "nfs-pvc",
+                "persistent_volume_claim": {
+                    "claim_name": "nfs",
+                },
+            },
+        ],
+    },
+    opts=pulumi.ResourceOptions(protect=False),
+)
+
+nginx = kubernetes.core.v1.Pod(
+    "nginx",
+    api_version="v1",
+    kind="Pod",
+    metadata={
+        "annotations": {},
+        "labels": {
+            "run": "nginx",
+        },
+        "name": "nginx",
+        "namespace": "default",
+    },
+    spec={
+        "containers": [
+            {
+                "image": "nginx",
+                "image_pull_policy": "Always",
+                "name": "nginx",
+                "resources": {},
+                "termination_message_path": "/dev/termination-log",
+                "termination_message_policy": "File",
+                "volume_mounts": [
+                    {
+                        "mount_path": "/var/nfs",
+                        "name": "nfs-vol",
+                    },
+                ],
+            }
+        ],
+        "dns_policy": "ClusterFirst",
+        "enable_service_links": True,
+        "node_name": "k3s-k8s-rs-79c0-d6fed8-node-pool-4c4d-7vl2i",
+        "preemption_policy": "PreemptLowerPriority",
+        "priority": 0,
+        "restart_policy": "Always",
+        "scheduler_name": "default-scheduler",
+        "security_context": {},
+        "service_account": "default",
+        "service_account_name": "default",
+        "termination_grace_period_seconds": 30,
+        "tolerations": [
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/not-ready",
+                "operator": "Exists",
+                "toleration_seconds": 300,
+            },
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/unreachable",
+                "operator": "Exists",
+                "toleration_seconds": 300,
+            },
+        ],
+        "volumes": [
+            {
+                "name": "nfs-vol",
+                "nfs": {
+                    "path": "/export",
+                    "server": "10.43.221.251",
+                },
+            },
+        ],
+    },
+    opts=pulumi.ResourceOptions(protect=False),
+)
